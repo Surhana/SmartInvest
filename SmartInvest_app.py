@@ -1,23 +1,23 @@
-
-import streamlit as st
+import streamlit as st 
 import pandas as pd
 import numpy as np
-from io import BytesIO
+import matplotlib.pyplot as plt
 
-# Title and description
-st.title("SmartInvest: MOORA-Based Stock Selection for Educational Innovation")
-st.markdown(""" 
-This app evaluates and ranks stocks based on multiple criteria using the **MOORA (Multi-Objective Optimization on the Basis of Ratio Analysis)** method. 
-Upload your stock dataset, specify weights for each criterion, and the system will compute rankings based on the MOORA method.
-""") 
+# Title
+st.title("SmartInvest: MOORA-Based Stock Selection System")
+st.markdown("""
+This app evaluates and ranks stocks based on multiple criteria using the **MOORA** method.
+Upload your stock dataset, assign weights to each criterion, choose benefit/cost criteria,
+and view rankings with tables and a bar chart.
+""")
 
-# File uploader for decision matrix (stock data)
+# File uploader
 uploaded_file = st.file_uploader("Upload Excel or CSV file with stock data", type=["csv", "xlsx"])
 
-# Example fallback dataset
+# Example data
 def load_example():
     data = {
-        'Stock': ['A', 'B', 'C'],
+        'Alternative': ['A', 'B', 'C'],
         'Price': [100, 120, 95],
         'P/E Ratio': [15, 18, 12],
         'Dividend Yield': [2.5, 3.0, 2.8],
@@ -25,84 +25,97 @@ def load_example():
     }
     return pd.DataFrame(data)
 
-# Load the data
-df = None
+# Load data
 if uploaded_file:
-    if uploaded_file.name.endswith("csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith("csv") else pd.read_excel(uploaded_file)
 else:
     st.info("No file uploaded. Using example dataset.")
     df = load_example()
 
-# Display the uploaded data or example
+# Ensure first column is Alternative
+df = df.rename(columns={df.columns[0]: "Alternative"})
+
 st.subheader("Stock Data")
 st.dataframe(df)
 
-# Extract stock names and criteria
-stocks = df.iloc[:, 0]
+alternatives = df["Alternative"]
 criteria = df.columns[1:]
 data = df.iloc[:, 1:].astype(float)
 
-# Input weights for each criterion
-st.subheader("Input Weights (must sum to 1)")
-weights = []
-for i, col in enumerate(criteria):
-    weight = st.number_input(f"Weight for {col}", min_value=0.0, max_value=1.0, value=1/len(criteria), step=0.01)
-    weights.append(weight)
+# ---------------- STEP 0: Input weights & Select criteria ----------------
+st.subheader("Input Weights and Select Criteria")
+weights = [st.number_input(f"Weight for {col}", min_value=0.0, max_value=1.0, 
+                           value=1/len(criteria), step=0.01) for col in criteria]
 
-# Ensure weights sum to 1
-if sum(weights) != 1:
-    st.warning("Weights must sum to 1! Please adjust the weights.")
+weight_sum = round(sum(weights),4)
+st.write(f"**Current weight sum:** {weight_sum}")
 
-# Normalize the data using vector normalization
-st.subheader("Step 1: Normalize the Data")
-normalized = data.copy()
-for i, col in enumerate(criteria):
-    norm = data[col] / np.sqrt((data[col]**2).sum())
-    normalized[col] = norm
-st.dataframe(normalized)
+# Select benefit and cost criteria below weight inputs
+benefit_criteria = st.multiselect("Select Benefit Criteria", criteria.tolist())
+cost_criteria = st.multiselect("Select Cost Criteria", [c for c in criteria if c not in benefit_criteria])
 
-# Weighted Normalized Matrix
-st.subheader("Step 2: Weighted Normalized Matrix")
-weighted = normalized.copy()
-for i, col in enumerate(criteria):
-    weighted[col] = weighted[col] * weights[i]
-st.dataframe(weighted)
+if weight_sum != 1:
+    st.warning("Weights must sum to 1 to proceed.")
+elif not benefit_criteria and not cost_criteria:
+    st.warning("Please select based on their criterion.")
+else:
+    # ---------------- STEP 1: Normalize ----------------
+    st.subheader("Step 1: Normalize the Data")
+    normalized_matrix = data.copy()
+    for i, col in enumerate(criteria):
+        normalized_matrix[col] = data[col] / np.sqrt((data[col]**2).sum())
+    normalized_df = pd.concat([alternatives, normalized_matrix], axis=1)
+    st.dataframe(normalized_df)
 
-# Calculate MOORA Performance Index (PIS)
-st.subheader("Step 3: MOORA Performance Index (PIS)")
-positive_ideal_solution = weighted.max()
-negative_ideal_solution = weighted.min()
+    # ---------------- STEP 2: Weighted Normalized Matrix ----------------
+    st.subheader("Step 2: Weighted Normalized Matrix")
+    weighted_matrix = normalized_matrix.copy()
+    for i, col in enumerate(criteria):
+        weighted_matrix[col] = normalized_matrix[col] * weights[i]
+    weighted_df = pd.concat([alternatives, weighted_matrix], axis=1)
+    st.dataframe(weighted_df)
 
-# Euclidean Distance from PIS and NIS
-distance_pis = np.sqrt(((weighted - positive_ideal_solution)**2).sum(axis=1))
-distance_nis = np.sqrt(((weighted - negative_ideal_solution)**2).sum(axis=1))
+    # ---------------- STEP 3: Calculate Performance Score ----------------
+    st.subheader("Step 3: Calculate Performance Score")
 
-# Calculate the relative closeness
-relative_closeness = distance_nis / (distance_pis + distance_nis)
+    # Compute MOORA (Performance Score)
+    benefit_data = weighted_matrix[benefit_criteria] if benefit_criteria else pd.DataFrame(np.zeros((len(alternatives),0)))
+    cost_data = weighted_matrix[cost_criteria] if cost_criteria else pd.DataFrame(np.zeros((len(alternatives),0)))
 
-# Calculate the final rankings based on the relative closeness
-st.subheader("Step 4: Final Rankings")
-ranking = pd.DataFrame({
-    'Stock': stocks,
-    'Distance from PIS': distance_pis,
-    'Distance from NIS': distance_nis,
-    'Relative Closeness': relative_closeness
-})
-ranking = ranking.sort_values(by="Relative Closeness", ascending=False).reset_index(drop=True)
+    performance_score = benefit_data.sum(axis=1) - cost_data.sum(axis=1)
 
-# Highlight the top-ranked stock
-def highlight_top(row):
-    return ['background-color: lightgreen'] * len(row) if row.name == 0 else [''] * len(row)
+    perf_df = pd.DataFrame({
+        "Alternative": alternatives,
+        "Performance Score": performance_score.round(4)
+    })
+    st.dataframe(perf_df)
 
-st.dataframe(ranking.style.apply(highlight_top, axis=1))
+    # ---------------- STEP 4: Final Rankings ----------------
+    st.subheader("Step 4: Final Rankings")
+    ranking = perf_df.sort_values('Performance Score', ascending=False).reset_index(drop=True)
+    ranking['Rank'] = range(1, len(ranking) + 1)
 
-# Download Results as CSV
-st.subheader("Download Result")
-def convert_df(df):
-    return df.to_csv(index=False).encode('utf-8')
+    # Format Performance Score to 4 decimals in ranking table
+    ranking['Performance Score'] = ranking['Performance Score'].map('{:.4f}'.format)
 
-csv = convert_df(ranking)
-st.download_button("Download Results as CSV", csv, "smartinvest_results.csv", "text/csv")
+    # Highlight the top-ranked alternative in green
+    def highlight_top(row):
+        return ['background-color: lightgreen'] * len(row) if row.name == 0 else [''] * len(row)
+
+    st.dataframe(ranking.style.apply(highlight_top, axis=1))
+
+    # Announce the best alternative
+    best_alt = ranking.loc[0, 'Alternative']
+    st.success(f"🏆 **The Best Alternative is:** {best_alt} ")
+
+    # ---------------- STEP 5: Vertical Bar Chart ----------------
+    st.subheader("Ranking the Chart")
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.bar(ranking['Alternative'], ranking['Performance Score'].astype(float), color='skyblue')
+    plt.xticks(rotation=0)
+    st.pyplot(fig)
+
+    # ---------------- DOWNLOAD CSV ----------------
+    st.subheader("Download Result")
+    csv = ranking.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Results as CSV", csv, "edurank_results.csv", "text/csv")
