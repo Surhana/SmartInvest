@@ -35,7 +35,7 @@ else:
 # Ensure first column is Alternative
 df = df.rename(columns={df.columns[0]: "Alternative"})
 
-st.subheader("Stock Data")
+st.subheader("the Data")
 st.dataframe(df)
 
 alternatives = df["Alternative"]
